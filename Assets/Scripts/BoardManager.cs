@@ -371,4 +371,58 @@ public class BoardManager : MonoBehaviour
         }
         if(s != null) Destroy(s.gameObject);
     }
+
+    // ★カーソル操作用の入れ替えメソッド
+    public void SwapStonesByCursor(int x, int y)
+    {
+        // 右隣と入れ替える前提
+        int x1 = x;
+        int x2 = x + 1;
+
+        Stone s1 = grid[x1, y];
+        Stone s2 = grid[x2, y];
+
+        // 両方とも空なら何もしない
+        if (s1 == null && s2 == null) return;
+
+        // ※本来は移動アニメーションを入れたいですが、まずはロジックだけで実装します
+        
+        // グリッド配列の中身を入れ替え
+        grid[x1, y] = s2;
+        grid[x2, y] = s1;
+
+        // 石の座標情報を更新
+        if (s1 != null)
+        {
+            s1.SetGrid(x2, y);
+            // s1.MoveToGridAnimated(...) を呼ぶとリッチになります
+        }
+        
+        if (s2 != null)
+        {
+            s2.SetGrid(x1, y);
+        }
+
+        // 入れ替えた結果、消えるかどうか判定するために処理を回す
+        PushUpAndDrop();
+    }
+
+    // 指定した場所の石を取得する
+    public Stone GetStoneAt(int x, int y)
+    {
+        if (!IsInside(x, y)) return null;
+        return grid[x, y];
+    }
+
+    // 指定した場所に石を強制配置する（配列の書き換え＋座標更新）
+    public void SetStoneAt(int x, int y, Stone s)
+    {
+        if (!IsInside(x, y)) return;
+        
+        grid[x, y] = s;
+        if (s != null)
+        {
+            s.SetGrid(x, y); // 石自身の座標データも更新
+        }
+    }
 }
