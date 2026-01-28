@@ -49,6 +49,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Assets\Scripts\Stone.cs" />
+    <Compile Include="Assets\Scripts\BoardCursor.cs" />
     <Compile Include="Assets\Scripts\BoardManager.cs" />
   </ItemGroup>
   <ItemGroup>
