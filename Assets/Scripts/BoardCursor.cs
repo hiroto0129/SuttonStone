@@ -1,33 +1,90 @@
 using UnityEngine;
+using System.Collections;
 
 public class BoardCursor : MonoBehaviour
 {
     [Header("Settings")]
     public BoardManager myBoard;
-    public Transform cursorVisual;
+    
+    // ▼ ここはもう使わないので、インスペクターで設定しなくてOKです
+    // public Transform cursorVisual; 
+    private Transform visualTransform; // 内部で自分自身を入れます
+
+    [Header("Visual Settings")]
+    public SpriteRenderer cursorRenderer; 
+    
+    [Tooltip("通常時の枠の色（白が見やすいです）")]
+    public Color idleColor = new Color(1f, 1f, 1f, 1f); 
+
+    [Tooltip("掴んでいる時の枠の色（金色などがおすすめ）")]
+    public Color holdColor = new Color(1f, 0.8f, 0.0f, 1f); 
 
     [Header("Controls")]
     public KeyCode upKey;
     public KeyCode downKey;
     public KeyCode leftKey;
     public KeyCode rightKey;
-    public KeyCode actionKey; // 掴む・離す
+    public KeyCode actionKey;
 
-    // カーソル位置
     private int cx = 0;
     private int cy = 0;
-
-    // 掴んでいる石
     private Stone heldStone = null;
 
-    void Start()
+    IEnumerator Start()
     {
+        // ★ここが修正ポイント
+        // 外部の物体(cursorVisual)を使わず、このスクリプトがついている
+        // 「自分自身(this.transform)」を動かすことにします。
+        visualTransform = this.transform;
+
+        // 1. 自分にSpriteRendererがなければ勝手につける
+        cursorRenderer = GetComponent<SpriteRenderer>();
+        if (cursorRenderer == null)
+        {
+            cursorRenderer = gameObject.AddComponent<SpriteRenderer>();
+        }
+
+        // 2. 枠の画像を生成してセット
+        if (cursorRenderer != null)
+        {
+            cursorRenderer.sprite = GenerateFrameSprite(64, 4);
+            cursorRenderer.color = idleColor;
+            
+            // ブロックより手前に表示
+            cursorRenderer.sortingOrder = 100;
+        }
+
+        // 3. 盤面の準備を待つ
+        yield return null;
+
         UpdateVisualPosition();
     }
 
     void Update()
     {
         if (myBoard.IsBusy) return;
+
+        // --- アニメーション演出 ---
+        if (cursorRenderer != null)
+        {
+            if (heldStone == null)
+            {
+                // 【通常時】
+                float alpha = 0.6f + Mathf.Sin(Time.time * 8f) * 0.4f; 
+                Color c = idleColor;
+                c.a = alpha;
+                cursorRenderer.color = c;
+            }
+            else
+            {
+                // 【掴んでいる時】
+                float scalePulse = 1.0f + Mathf.Sin(Time.time * 15f) * 0.05f; 
+                cursorRenderer.color = holdColor; 
+                
+                float baseWidth = heldStone.blockWidth;
+                visualTransform.localScale = new Vector3(baseWidth * scalePulse, 1f * scalePulse, 1);
+            }
+        }
 
         // --- 移動入力 ---
         int dx = 0;
@@ -44,129 +101,111 @@ public class BoardCursor : MonoBehaviour
         }
 
         // --- 掴む / 離す ---
-        if (Input.GetKeyDown(actionKey))
+        if (Input.GetKeyDown(actionKey) || Input.GetKeyDown(KeyCode.KeypadEnter))
         {
-            if (heldStone == null)
-            {
-                TryPickUp();
-            }
-            else
-            {
-                TryDrop();
-            }
+            if (heldStone == null) TryPickUp();
+            else TryDrop();
         }
     }
-
-    // ★重要：ここにあった古い AttemptMove を削除し、下の新しいものだけにしました
 
     void UpdateVisualPosition()
     {
-        if (cursorVisual == null) return;
+        // visualTransform (自分自身) を動かします
+        if (visualTransform == null) return;
 
-        // --- デフォルトの設定（空きマスの場合） ---
         int displayWidth = 1;
         Vector3 targetPos = myBoard.GridToWorld(cx, cy);
 
-        // --- 状況に応じてサイズと位置を補正 ---
-        
         if (heldStone != null)
         {
-            // パターンA：【石を持っている時】
+            // --- 【石を持っている時】 ---
             displayWidth = heldStone.blockWidth;
-
-            // 基準位置(cx)から、幅の分だけ中心を右にずらす
             targetPos.x += (displayWidth - 1) * 0.5f;
-            
-            // 持っている石もカーソルに合わせて動かす
             heldStone.transform.position = targetPos;
+
+            if (cursorRenderer != null) cursorRenderer.color = holdColor;
+            if (cursorRenderer != null) cursorRenderer.sortingOrder = 100;
         }
         else
         {
-            // パターンB：【石を持っていない時】
+            // --- 【石を持っていない時】 ---
             Stone target = myBoard.GetStoneAt(cx, cy);
-
             if (target != null)
             {
-                // 石があるなら、その石の幅に合わせる
                 displayWidth = target.blockWidth;
-
-                // 位置も「石の場所」にピタッと吸着させる
                 targetPos = target.transform.position;
             }
+
+            if (cursorRenderer != null) cursorRenderer.color = idleColor;
+            
+            // 掴んでいない時はサイズを戻す
+            visualTransform.localScale = new Vector3(displayWidth, 1, 1);
+            
+            if (cursorRenderer != null) cursorRenderer.sortingOrder = 20; 
         }
 
-        // --- カーソルの見た目を適用 ---
-        cursorVisual.position = targetPos;
-        cursorVisual.localScale = new Vector3(displayWidth, 1, 1);
+        visualTransform.position = targetPos;
     }
 
+    // 枠生成（変更なし）
+    Sprite GenerateFrameSprite(int size, int borderThickness)
+    {
+        Texture2D tex = new Texture2D(size, size);
+        tex.filterMode = FilterMode.Point;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        Color[] colors = new Color[size * size];
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                bool isBorder = (x < borderThickness) || (x >= size - borderThickness) ||
+                                (y < borderThickness) || (y >= size - borderThickness);
+
+                if (isBorder) colors[y * size + x] = Color.white;
+                else colors[y * size + x] = Color.clear;
+            }
+        }
+        tex.SetPixels(colors);
+        tex.Apply();
+        return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
+    }
+    
+    // (以下、ロジック変更なし)
     void TryPickUp()
     {
         Stone target = myBoard.GetStoneAt(cx, cy);
         if (target == null) return;
-
         heldStone = target;
-
-        // ★★★ 修正点：ここが重要！ ★★★
-        // 掴んだ瞬間、カーソル(cx, cy)を、その石の「本当の左端(x, y)」に強制的に合わせます。
-        // これで「右側を掴んでも、左端基準で動かせる」ようになります。
         cx = heldStone.x;
         cy = heldStone.y;
-        
-        // カーソルの見た目も、左端に合わせて再描画（カクっと左に吸着する動きになります）
         UpdateVisualPosition();
-        
-        // 必要なら：掴んだことがわかるように少し音を鳴らすなどの処理
     }
 
     void TryDrop()
     {
         if (heldStone == null) return;
-
-        // 手を離す
         heldStone = null;
-
-        // 揃ったかチェック！
         myBoard.PushUpAndDrop();
+        UpdateVisualPosition();
     }
-    
-    // 移動の試行
+
     void AttemptMove(int dx, int dy)
     {
-        // --- 1. 石を持っていない時の移動（★ここを修正！） ---
         if (heldStone == null)
         {
             int nx = cx;
-            int ny = cy + dy; // 縦移動はそのまま
-
-            // 横移動の計算
+            int ny = cy + dy;
             if (dx != 0)
             {
-                // 今、足元に石があるか調べる
                 Stone currentStone = myBoard.GetStoneAt(cx, cy);
-
-                if (currentStone == null)
-                {
-                    // 足元が空っぽなら、普通に1マス移動
-                    nx = cx + dx;
-                }
+                if (currentStone == null) nx = cx + dx;
                 else
                 {
-                    // ★足元に石がある場合：ブロックの幅分スキップする！
-                    if (dx > 0)
-                    {
-                        // 右へ：そのブロックの「右端の隣」へジャンプ
-                        nx = currentStone.x + currentStone.blockWidth;
-                    }
-                    else
-                    {
-                        // 左へ：そのブロックの「左端の隣」へジャンプ
-                        nx = currentStone.x - 1;
-                    }
+                    if (dx > 0) nx = currentStone.x + currentStone.blockWidth;
+                    else nx = currentStone.x - 1;
                 }
             }
-
-            // 画面外に出ていなければ移動確定
             if (myBoard.IsInside(nx, ny))
             {
                 cx = nx;
@@ -176,51 +215,19 @@ public class BoardCursor : MonoBehaviour
             return;
         }
 
-        // --- 2. 石を持っている時の移動（ここは前回と同じ） ---
-        
-        // 仕様：縦移動は禁止
         if (dy != 0) return; 
-
-        // 移動先の左端座標
         int targetX = cx + dx;
         int w = heldStone.blockWidth; 
-
-        // 画面外チェック
         if (targetX < 0 || targetX + w > myBoard.width) return;
-
-        // 衝突判定
         for (int k = 0; k < w; k++)
         {
             Stone obstacle = myBoard.GetStoneAt(targetX + k, cy);
-            if (obstacle != null && obstacle != heldStone)
-            {
-                return; // 動けない
-            }
+            if (obstacle != null && obstacle != heldStone) return;
         }
-
-        // 盤面データを更新
-        // 1. まず、古い場所にいる自分を消す
-        for (int k = 0; k < w; k++)
-        {
-            myBoard.SetStoneAt(cx + k, cy, null);
-        }
-
-        // 2. カーソル座標更新
+        for (int k = 0; k < w; k++) myBoard.SetStoneAt(cx + k, cy, null);
         cx = targetX;
-        
-        // 3. 新しい場所に自分を登録
-        for (int k = 0; k < w; k++)
-        {
-            myBoard.SetStoneAt(cx + k, cy, heldStone);
-        }
-
-        // ★座標補正（右側を持っていた場合のズレ防止）
-        if (heldStone != null)
-        {
-            heldStone.SetGrid(cx, cy);
-        }
-
-        // 4. 見た目の更新
+        for (int k = 0; k < w; k++) myBoard.SetStoneAt(cx + k, cy, heldStone);
+        if (heldStone != null) heldStone.SetGrid(cx, cy);
         UpdateVisualPosition();
     }
 }
