@@ -13,7 +13,6 @@ public class BoardManager : MonoBehaviour
     public Transform bottomLine;
     public GameObject stonePrefab;
     
-    // ★ここに「対戦相手」を入れる欄を追加しました！
     [Header("Versus")]
     public BoardManager opponent; 
 
@@ -25,7 +24,6 @@ public class BoardManager : MonoBehaviour
         Color.red, Color.blue, Color.green, Color.yellow, new Color(1f, 0.5f, 0f)
     };
 
-    // 外部から今のボードの状態を知るためのプロパティ
     public bool IsBusy { get; private set; } = false;
 
     void Awake()
@@ -35,7 +33,14 @@ public class BoardManager : MonoBehaviour
 
     void Start()
     {
-        PushUpAndDrop();
+        // 最初は少し盤面を作っておく
+        PushUp();
+
+    }
+    
+    void Update()
+    {
+        // 自動せり上がりはOFF
     }
 
     // --- 座標変換系 ---
@@ -89,27 +94,7 @@ public class BoardManager : MonoBehaviour
         s.SetGrid(cx, y);
     }
 
-    public Vector2Int GetMovableRange(Stone s)
-    {
-        int y = s.y;
-        int w = s.blockWidth;
-        int minX = s.x;
-        int maxX = s.x;
-
-        for (int x = s.x - 1; x >= 0; x--)
-        {
-            if (grid[x, y] != null) break;
-            minX = x;
-        }
-        for (int x = s.x + w; x < width; x++)
-        {
-            if (grid[x, y] != null) break;
-            maxX = x - (w - 1);
-        }
-        return new Vector2Int(minX, maxX);
-    }
-
-    // --- ゲーム進行（せり上がり・落下・削除） ---
+    // --- ゲーム進行 ---
 
     public void PushUpAndDrop()
     {
@@ -117,58 +102,74 @@ public class BoardManager : MonoBehaviour
         StartCoroutine(PushUpAndDropCoroutine());
     }
 
-    IEnumerator PushUpAndDropCoroutine()
+   IEnumerator PushUpAndDropCoroutine()
     {
         IsBusy = true;
 
         // 1. まず浮いている石を落とす
         DropStones();
-        yield return new WaitForSeconds(0.4f); // 着地待ち
+        yield return new WaitForSeconds(0.2f);
 
         // 2. 揃っているかチェック
         bool cleared = CheckAndClearHorizontal();
         
-        // ★もし消えたら、その分を落とす
         if (cleared)
         {
             yield return new WaitForSeconds(0.5f); // 消える演出待ち
-            DropStones(); // 落とす！
-            yield return new WaitForSeconds(0.4f); // 着地待ち
+            DropStones(); // 落とす
+            yield return new WaitForSeconds(0.2f); // 着地待ち
         }
 
-        // 3. せり上げ（新しい行の追加）
-        PushUp();
+        // ★修正点：if - else にして、「お邪魔優先」または「通常」のどちらか1回だけ実行する
+        if (pendingGarbage > 0)
+        {
+            // お邪魔ストックがあるなら、お邪魔を1段上げる（通常ブロックは上げない）
+            ExecutePushUpInternal(true);
+        }
+        else
+        {
+            // ストックがないなら、通常通り1段上げる（ここが抜けていました）
+            ExecutePushUpInternal(false);
+        }
+        
         yield return new WaitForSeconds(0.3f); // 上がるアニメ待ち
         
         // 4. せり上げ後の再落下
         DropStones();
-        yield return new WaitForSeconds(0.4f); // 着地待ち
+        yield return new WaitForSeconds(0.2f); // 着地待ち
 
-        // 5. 最後に「せり上がった結果」揃ったかチェック
+        // 5. 最後に再チェック
         cleared = CheckAndClearHorizontal();
         
-        // ★ここを追加！ 最後にもし消えたら、放置せずに落とす！
         if (cleared)
         {
-            yield return new WaitForSeconds(0.5f); // 消える演出待ち
-            DropStones(); // すぐ落とす！
-            yield return new WaitForSeconds(0.4f); // 着地待ち
+            yield return new WaitForSeconds(0.5f);
+            DropStones();
+            yield return new WaitForSeconds(0.2f);
         }
 
         IsBusy = false;
     }
-
-    // ★相手から攻撃を受け取るメソッド
+    // 攻撃受け取り
     public void ReceiveGarbage(int lines)
     {
         pendingGarbage += lines;
-        // ここで「お邪魔ブロックが来るぞ！」という演出を入れても良い
+        
+        // 相手が操作中でなければ、メインの処理を開始する
+        if (!IsBusy)
+        {
+            // ★修正前：ExecutePushUpInternal(true); // これだと「上げる」だけで「落とす」処理がない
+            
+            // ★修正後：PushUpAndDrop(); を呼ぶ
+            // これなら [上げる] -> [アニメ待ち] -> [落とす(DropStones)] まで全部やってくれます
+            PushUpAndDrop(); 
+        }
     }
 
     public bool CheckAndClearHorizontal()
     {
         bool anyCleared = false;
-        int linesClearedThisTurn = 0; // 消したライン数カウント
+        int linesClearedThisTurn = 0;
 
         for (int y = 0; y < height; y++)
         {
@@ -187,7 +188,6 @@ public class BoardManager : MonoBehaviour
                 anyCleared = true;
                 linesClearedThisTurn++;
 
-                // 一列まるごと削除
                 for (int x = 0; x < width; x++)
                 {
                     Stone s = grid[x, y];
@@ -203,24 +203,16 @@ public class BoardManager : MonoBehaviour
             }
         }
 
-        // ★ラインが消えていて、かつ相手がいるなら攻撃を送る！
         if (linesClearedThisTurn > 0 && opponent != null)
         {
-            // 例：1列消し=0, 2列消し=1行送る...などルールはお好みで。
-            // ここではシンプルに「消した列数 - 1」を送る設定にしてみます（1列だけなら送らない）
-            int attackAmount = linesClearedThisTurn - 1;
-            if (linesClearedThisTurn >= 2) // 2列以上同時消しなら攻撃
-            {
-                opponent.ReceiveGarbage(attackAmount > 0 ? attackAmount : 1);
-            }
+            opponent.ReceiveGarbage(linesClearedThisTurn);
         }
 
         return anyCleared;
     }
 
-    public void PushUp()
+    bool ShiftStonesUp()
     {
-        // 上へずらす
         for (int y = height - 1; y >= 0; y--)
         {
             HashSet<Stone> processedStones = new HashSet<Stone>();
@@ -230,60 +222,111 @@ public class BoardManager : MonoBehaviour
                 if (s != null && !processedStones.Contains(s))
                 {
                     processedStones.Add(s);
+                    
                     if (y + 1 >= height) 
                     { 
                         Debug.Log("GAME OVER"); 
-                        // ここでゲームオーバー処理
-                        return; 
+                        return false; 
                     }
 
                     for(int k=0; k<s.blockWidth; k++) grid[s.x + k, y] = null;
                     for(int k=0; k<s.blockWidth; k++) grid[s.x + k, y + 1] = s;
+                    
                     s.MoveToGridAnimated(s.x, y + 1, 0.3f);
                 }
             }
         }
+        return true;
+    }
 
-        // 下から新しい行を追加
-        GenerateNewRow();
-        
-        // ★相手から攻撃を受けていたら、さらにもう1行追加（お邪魔）
-        if (pendingGarbage > 0)
+    // 外部から手動で呼ぶ用（デバッグボタン等）は「通常ブロック」として呼ぶ
+    public void PushUp()
+    {
+        if (IsBusy) return;
+        ExecutePushUpInternal(false);
+    }
+
+    // ★修正：引数 isGarbage を追加し、どちらか1段だけを生成するように変更
+    private void ExecutePushUpInternal(bool isGarbage)
+    {
+        // 1. せり上げ実行
+        if (!ShiftStonesUp()) return;
+
+        // 2. 行生成
+        // お邪魔モードならお邪魔行、そうでなければ通常行
+        GenerateNewRow(isGarbage); 
+
+        // お邪魔として生成したなら、ストックを減らす
+        if (isGarbage && pendingGarbage > 0)
         {
-            // お邪魔行の生成（全部埋まって消しにくい行など）
-            // ここでは簡易的に通常の生成を呼び出しますが、本来は「固いブロック」などを出す
-            GenerateNewRow(); 
             pendingGarbage--;
         }
     }
 
-    void GenerateNewRow()
+    void GenerateNewRow(bool isGarbage)
     {
         int currentX = 0;
         bool hasGap = false;
+
+        // 色のリストをここで定義して、インスペクター等の影響を受けないようにする
+        Color[] safeColors = new Color[]
+        {
+            Color.red, 
+            Color.blue, 
+            Color.green, 
+            Color.yellow, 
+            new Color(1f, 0.5f, 0f), // オレンジ
+            Color.cyan, 
+            Color.magenta
+        };
+        
         while (currentX < width)
         {
             int remainingSpace = width - currentX;
-            bool wantBlock = (Random.value < 0.7f);
+            
+            // お邪魔行なら「基本ブロックを置く」が、たまに(10%くらい)ランダムで隙間を作る
+            bool wantBlock = isGarbage ? (Random.value > 0.1f) : (Random.value < 0.7f);
 
-            if (!hasGap && remainingSpace == 1) wantBlock = false;
+            // 通常行で、残り1マスかつまだ隙間がないなら、強制的に隙間を作る（埋まり防止）
+            if (!isGarbage && !hasGap && remainingSpace == 1) wantBlock = false;
+            
+            // お邪魔行でも、最後まで隙間がなかったら最後の1マスは強制的に空ける
+            if (isGarbage && !hasGap && remainingSpace == 1) wantBlock = false;
 
             if (wantBlock)
             {
                 int maxW = Mathf.Min(4, remainingSpace);
+                
+                // お邪魔なら1〜maxW、通常も1〜maxW（形状はランダム）
                 int w = Random.Range(1, maxW + 1);
+
+                // まだ隙間がなく、かつ「残り幅全部」を埋めようとした場合
                 if (!hasGap && w == remainingSpace)
                 {
                     w = remainingSpace - 1;
-                    if (w <= 0) wantBlock = false;
+                    if (w <= 0) wantBlock = false; 
                 }
 
-                if (wantBlock)
+                if (wantBlock && w > 0)
                 {
-                    Color blockColor = presetColors[Random.Range(0, presetColors.Length)];
-                    Stone s = Instantiate(stonePrefab).GetComponent<Stone>();
-                    s.Init(this, currentX, 0, w, blockColor);
-                    for (int k = 0; k < w; k++) grid[currentX + k, 0] = s;
+                    Color c;
+                    if (isGarbage)
+                    {
+                        c = Color.gray; // お邪魔なら確実にグレー
+                    }
+                    else
+                    {
+                        // 通常ならリストからランダム（絶対にグレーにならない）
+                        c = safeColors[Random.Range(0, safeColors.Length)];
+                    }
+                    
+                    Stone s = Instantiate(stonePrefab, transform).GetComponent<Stone>();
+                    s.Init(this, currentX, 0, w, c);
+                    
+                    for (int k = 0; k < w; k++) 
+                    {
+                        if (currentX + k < width) grid[currentX + k, 0] = s;
+                    }
                     currentX += w;
                 }
                 else
@@ -299,7 +342,6 @@ public class BoardManager : MonoBehaviour
             }
         }
     }
-
     public void DropStones()
     {
         HashSet<Stone> processedFrame = new HashSet<Stone>();
@@ -372,57 +414,40 @@ public class BoardManager : MonoBehaviour
         if(s != null) Destroy(s.gameObject);
     }
 
-    // ★カーソル操作用の入れ替えメソッド
-    public void SwapStonesByCursor(int x, int y)
+    public Vector2Int GetMovableRange(Stone s)
     {
-        // 右隣と入れ替える前提
-        int x1 = x;
-        int x2 = x + 1;
+        int y = s.y;
+        int w = s.blockWidth;
+        int minX = s.x;
+        int maxX = s.x;
 
-        Stone s1 = grid[x1, y];
-        Stone s2 = grid[x2, y];
-
-        // 両方とも空なら何もしない
-        if (s1 == null && s2 == null) return;
-
-        // ※本来は移動アニメーションを入れたいですが、まずはロジックだけで実装します
-        
-        // グリッド配列の中身を入れ替え
-        grid[x1, y] = s2;
-        grid[x2, y] = s1;
-
-        // 石の座標情報を更新
-        if (s1 != null)
+        for (int x = s.x - 1; x >= 0; x--)
         {
-            s1.SetGrid(x2, y);
-            // s1.MoveToGridAnimated(...) を呼ぶとリッチになります
+            if (grid[x, y] != null) break;
+            minX = x;
         }
         
-        if (s2 != null)
+        for (int x = s.x + w; x < width; x++)
         {
-            s2.SetGrid(x1, y);
+            if (grid[x, y] != null) break;
+            maxX = x - (w - 1);
         }
-
-        // 入れ替えた結果、消えるかどうか判定するために処理を回す
-        PushUpAndDrop();
+        return new Vector2Int(minX, maxX);
     }
 
-    // 指定した場所の石を取得する
     public Stone GetStoneAt(int x, int y)
     {
         if (!IsInside(x, y)) return null;
         return grid[x, y];
     }
 
-    // 指定した場所に石を強制配置する（配列の書き換え＋座標更新）
     public void SetStoneAt(int x, int y, Stone s)
     {
         if (!IsInside(x, y)) return;
-        
         grid[x, y] = s;
         if (s != null)
         {
-            s.SetGrid(x, y); // 石自身の座標データも更新
+            s.SetGrid(x, y);
         }
     }
 }
