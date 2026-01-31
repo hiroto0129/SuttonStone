@@ -30,9 +30,12 @@ public class BoardCursor : MonoBehaviour
     private int cy = 0;
     private Stone heldStone = null;
 
+    // ★追加：掴み始めた場所を覚えておく変数
+    private int startCx = 0;
+    private int startCy = 0;
+
     IEnumerator Start()
     {
-        // ★ここが修正ポイント
         // 外部の物体(cursorVisual)を使わず、このスクリプトがついている
         // 「自分自身(this.transform)」を動かすことにします。
         visualTransform = this.transform;
@@ -49,9 +52,7 @@ public class BoardCursor : MonoBehaviour
         {
             cursorRenderer.sprite = GenerateFrameSprite(64, 4);
             cursorRenderer.color = idleColor;
-            
-            // ブロックより手前に表示
-            cursorRenderer.sortingOrder = 100;
+            cursorRenderer.sortingOrder = 100; // ブロックより手前に表示
         }
 
         // 3. 盤面の準備を待つ
@@ -171,7 +172,6 @@ public class BoardCursor : MonoBehaviour
         return Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), size);
     }
     
-    // (以下、ロジック変更なし)
     void TryPickUp()
     {
         Stone target = myBoard.GetStoneAt(cx, cy);
@@ -179,6 +179,11 @@ public class BoardCursor : MonoBehaviour
         heldStone = target;
         cx = heldStone.x;
         cy = heldStone.y;
+        
+        // ★変更点：掴んだ瞬間の場所を記録しておく
+        startCx = cx;
+        startCy = cy;
+
         UpdateVisualPosition();
     }
 
@@ -186,48 +191,114 @@ public class BoardCursor : MonoBehaviour
     {
         if (heldStone == null) return;
         heldStone = null;
-        myBoard.PushUpAndDrop();
+
+        // ★変更点：場所が変わったときだけ、盤面処理(PushUpAndDrop)を呼ぶ
+        // （元の場所に戻しただけなら、何もしない）
+        if (cx != startCx || cy != startCy)
+        {
+            myBoard.PushUpAndDrop();
+        }
+
         UpdateVisualPosition();
     }
 
     void AttemptMove(int dx, int dy)
     {
+        // ----------------------------------------------------
+        // パターンA：石を持っていない時（カーソル移動）
+        // ----------------------------------------------------
         if (heldStone == null)
         {
-            int nx = cx;
-            int ny = cy + dy;
+            // --- 縦移動（変更なし） ---
+            if (dy != 0)
+            {
+                int ny = cy + dy;
+                if (myBoard.IsInside(cx, ny))
+                {
+                    cy = ny;
+                    UpdateVisualPosition();
+                }
+                return;
+            }
+
+            // --- 横移動（★ここを修正：空白を飛ばすロジック） ---
             if (dx != 0)
             {
                 Stone currentStone = myBoard.GetStoneAt(cx, cy);
-                if (currentStone == null) nx = cx + dx;
-                else
+                
+                // 検索開始位置を決める
+                // 右へ行くなら、今の石の右端の次のマスからスタート
+                // 左へ行くなら、今の石の左端の前のマスからスタート
+                int startX = cx;
+
+                if (dx > 0) // 右へ
                 {
-                    if (dx > 0) nx = currentStone.x + currentStone.blockWidth;
-                    else nx = currentStone.x - 1;
+                    if (currentStone != null) startX = currentStone.x + currentStone.blockWidth;
+                    else startX = cx + 1;
+
+                    // 右端までループして石を探す
+                    for (int x = startX; x < myBoard.width; x++)
+                    {
+                        Stone found = myBoard.GetStoneAt(x, cy);
+                        if (found != null)
+                        {
+                            cx = found.x; // 見つけた石の位置へ飛ぶ
+                            UpdateVisualPosition();
+                            return; // 移動完了
+                        }
+                    }
                 }
-            }
-            if (myBoard.IsInside(nx, ny))
-            {
-                cx = nx;
-                cy = ny;
-                UpdateVisualPosition();
+                else // 左へ
+                {
+                    startX = cx - 1;
+
+                    // 左端(0)までループして石を探す
+                    for (int x = startX; x >= 0; x--)
+                    {
+                        Stone found = myBoard.GetStoneAt(x, cy);
+                        if (found != null)
+                        {
+                            cx = found.x; // 見つけた石の位置へ飛ぶ（石の左上が原点なのでxでOK）
+                            UpdateVisualPosition();
+                            return; // 移動完了
+                        }
+                    }
+                }
             }
             return;
         }
 
-        if (dy != 0) return; 
+        // ----------------------------------------------------
+        // パターンB：石を持っている時（移動先を選ぶ）
+        // ※持っている時は、空白に置きたいこともあるので、今まで通り1マスずつ動かします
+        // ----------------------------------------------------
+        if (dy != 0) return; // 持っている時は縦移動禁止（ルール次第ですが一旦禁止のまま）
+
         int targetX = cx + dx;
         int w = heldStone.blockWidth; 
+        
+        // 盤面の外に出ないかチェック
         if (targetX < 0 || targetX + w > myBoard.width) return;
+        
+        // 移動先に他の石がないかチェック（障害物判定）
         for (int k = 0; k < w; k++)
         {
             Stone obstacle = myBoard.GetStoneAt(targetX + k, cy);
             if (obstacle != null && obstacle != heldStone) return;
         }
+
+        // --- グリッド情報の書き換え ---
+        // 1. 今の場所を空にする
         for (int k = 0; k < w; k++) myBoard.SetStoneAt(cx + k, cy, null);
+        
+        // 2. 座標更新
         cx = targetX;
+        
+        // 3. 新しい場所に自分を置く
         for (int k = 0; k < w; k++) myBoard.SetStoneAt(cx + k, cy, heldStone);
+        
         if (heldStone != null) heldStone.SetGrid(cx, cy);
+        
         UpdateVisualPosition();
     }
 }
