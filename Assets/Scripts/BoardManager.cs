@@ -1,30 +1,39 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro; 
+using UnityEngine.SceneManagement; 
 
 public class BoardManager : MonoBehaviour
 {
     [Header("Settings")]
     public int width = 8;
-    public int height = 10;
+    public int height = 12; // 画像に合わせて少し高くしました
 
     [Header("References")]
     public Transform leftWall;
     public Transform bottomLine;
     public GameObject stonePrefab;
-    
+
+    [Header("UI")]
+    public TextMeshProUGUI resultText; 
+    public GameObject restartButton;   
+
     [Header("Versus")]
-    public BoardManager opponent; 
+    public BoardManager opponent;
 
     private Stone[,] grid;
-    private int pendingGarbage = 0; // 相手から送られてきたお邪魔ブロックの数
+    private int pendingGarbage = 0;
 
-    Color[] presetColors = new Color[]
-    {
-        Color.red, Color.blue, Color.green, Color.yellow, new Color(1f, 0.5f, 0f)
-    };
-
+    public bool IsGameOver { get; private set; } = false;
     public bool IsBusy { get; private set; } = false;
+
+    Color[] safeColors = new Color[]
+    {
+        Color.red, Color.blue, Color.green, Color.yellow,
+        new Color(1f, 0.5f, 0f), Color.cyan, Color.magenta
+    };
 
     void Awake()
     {
@@ -33,17 +42,14 @@ public class BoardManager : MonoBehaviour
 
     void Start()
     {
-        // 最初は少し盤面を作っておく
+        if (resultText != null) resultText.gameObject.SetActive(false);
+        if (restartButton != null) restartButton.SetActive(false);
+        
+        // ゲーム開始時に少しブロックを生成
         PushUp();
-
-    }
-    
-    void Update()
-    {
-        // 自動せり上がりはOFF
     }
 
-    // --- 座標変換系 ---
+    // --- 座標変換 ---
     public Vector3 GridToWorld(int x, int y)
     {
         return new Vector3(leftWall.position.x + x + 0.5f, bottomLine.position.y + y + 0.5f, 0);
@@ -75,6 +81,7 @@ public class BoardManager : MonoBehaviour
             if (nx < 0 || nx + w - 1 >= width) break;
 
             bool blocked = false;
+            // 進行方向の障害物チェック
             if (dir > 0)
             {
                 if (grid[nx + w - 1, y] != null) blocked = true;
@@ -86,6 +93,7 @@ public class BoardManager : MonoBehaviour
 
             if (blocked) break;
 
+            // グリッド更新
             for (int k = 0; k < w; k++) grid[cx + k, y] = null;
             for (int k = 0; k < w; k++) grid[nx + k, y] = s;
 
@@ -94,53 +102,53 @@ public class BoardManager : MonoBehaviour
         s.SetGrid(cx, y);
     }
 
-    // --- ゲーム進行 ---
-
+    // --- ゲーム進行フロー ---
     public void PushUpAndDrop()
     {
-        if (IsBusy) return;
+        if (IsBusy || IsGameOver) return;
         StartCoroutine(PushUpAndDropCoroutine());
     }
 
-   IEnumerator PushUpAndDropCoroutine()
+    IEnumerator PushUpAndDropCoroutine()
     {
         IsBusy = true;
 
-        // 1. まず浮いている石を落とす
         DropStones();
         yield return new WaitForSeconds(0.2f);
 
-        // 2. 揃っているかチェック
         bool cleared = CheckAndClearHorizontal();
-        
         if (cleared)
         {
-            yield return new WaitForSeconds(0.5f); // 消える演出待ち
-            DropStones(); // 落とす
-            yield return new WaitForSeconds(0.2f); // 着地待ち
+            yield return new WaitForSeconds(0.5f);
+            DropStones();
+            yield return new WaitForSeconds(0.2f);
         }
 
-        // ★修正点：if - else にして、「お邪魔優先」または「通常」のどちらか1回だけ実行する
+        // お邪魔ブロックがあるか、なければ通常のせり上げ
         if (pendingGarbage > 0)
         {
-            // お邪魔ストックがあるなら、お邪魔を1段上げる（通常ブロックは上げない）
-            ExecutePushUpInternal(true);
+            if (!ExecutePushUpInternal(true)) 
+            {
+                // せり上げ失敗（ゲームオーバー）ならループを抜ける
+                IsBusy = false;
+                yield break; 
+            }
         }
         else
         {
-            // ストックがないなら、通常通り1段上げる（ここが抜けていました）
-            ExecutePushUpInternal(false);
+            if (!ExecutePushUpInternal(false))
+            {
+                IsBusy = false;
+                yield break;
+            }
         }
-        
-        yield return new WaitForSeconds(0.3f); // 上がるアニメ待ち
-        
-        // 4. せり上げ後の再落下
-        DropStones();
-        yield return new WaitForSeconds(0.2f); // 着地待ち
 
-        // 5. 最後に再チェック
+        yield return new WaitForSeconds(0.3f);
+
+        DropStones();
+        yield return new WaitForSeconds(0.2f);
+
         cleared = CheckAndClearHorizontal();
-        
         if (cleared)
         {
             yield return new WaitForSeconds(0.5f);
@@ -150,24 +158,62 @@ public class BoardManager : MonoBehaviour
 
         IsBusy = false;
     }
-    // 攻撃受け取り
+
     public void ReceiveGarbage(int lines)
     {
+        if (IsGameOver) return;
         pendingGarbage += lines;
-        
-        // 相手が操作中でなければ、メインの処理を開始する
         if (!IsBusy)
         {
-            // ★修正前：ExecutePushUpInternal(true); // これだと「上げる」だけで「落とす」処理がない
-            
-            // ★修正後：PushUpAndDrop(); を呼ぶ
-            // これなら [上げる] -> [アニメ待ち] -> [落とす(DropStones)] まで全部やってくれます
-            PushUpAndDrop(); 
+            PushUpAndDrop();
         }
     }
 
+    // --- 勝敗判定 ---
+    public void TriggerLose()
+    {
+        if (IsGameOver) return;
+        IsGameOver = true;
+        
+        Debug.Log("GAME OVER: LIMIT REACHED");
+
+        if (resultText != null)
+        {
+            resultText.text = "YOU LOSE...";
+            // ★【修正点1】文字色を青に変更
+            resultText.color = Color.blue; 
+            resultText.gameObject.SetActive(true);
+        }
+        if (restartButton != null) restartButton.SetActive(true);
+
+        if (opponent != null) opponent.TriggerWin();
+    }
+
+    public void TriggerWin()
+    {
+        if (IsGameOver) return;
+        IsGameOver = true;
+        
+        if (resultText != null)
+        {
+            resultText.text = "YOU WIN!!";
+            resultText.color = Color.yellow;
+            resultText.gameObject.SetActive(true);
+        }
+        if (restartButton != null) restartButton.SetActive(true);
+    }
+
+    public void ReloadScene()
+    {
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+    }
+
+
+    // --- 内部ロジック ---
     public bool CheckAndClearHorizontal()
     {
+        if (IsGameOver) return false;
+
         bool anyCleared = false;
         int linesClearedThisTurn = 0;
 
@@ -210,10 +256,37 @@ public class BoardManager : MonoBehaviour
 
         return anyCleared;
     }
+    
+    public void PushUp()
+    {
+        if (IsBusy || IsGameOver) return;
+        ExecutePushUpInternal(false);
+    }
 
+    // 戻り値をboolにして、失敗(ゲームオーバー)したか分かるようにする
+    private bool ExecutePushUpInternal(bool isGarbage)
+    {
+        // ★修正ポイント：ShiftStonesUpを呼び出すだけにする（中身を書かない）
+        if (!ShiftStonesUp()) 
+        {
+             return false; // ゲームオーバーになったので中断
+        }
+
+        GenerateNewRow(isGarbage);
+
+        if (isGarbage && pendingGarbage > 0)
+        {
+            pendingGarbage--;
+        }
+        return true;
+    }
+
+    // ★修正ポイント：ShiftStonesUpメソッドはここ（ExecutePushUpInternalの外）に定義する
+    // ★修正：ブロックを1段上げる処理
     bool ShiftStonesUp()
     {
-        for (int y = height - 1; y >= 0; y--)
+        // 1. まずブロックをすべて1段上げる
+        for (int y = height - 2; y >= 0; y--)
         {
             HashSet<Stone> processedStones = new HashSet<Stone>();
             for (int x = 0; x < width; x++)
@@ -223,110 +296,76 @@ public class BoardManager : MonoBehaviour
                 {
                     processedStones.Add(s);
                     
-                    if (y + 1 >= height) 
-                    { 
-                        Debug.Log("GAME OVER"); 
-                        return false; 
-                    }
-
-                    for(int k=0; k<s.blockWidth; k++) grid[s.x + k, y] = null;
-                    for(int k=0; k<s.blockWidth; k++) grid[s.x + k, y + 1] = s;
+                    for (int k = 0; k < s.blockWidth; k++) grid[s.x + k, y] = null;
+                    for (int k = 0; k < s.blockWidth; k++) grid[s.x + k, y + 1] = s;
                     
                     s.MoveToGridAnimated(s.x, y + 1, 0.3f);
                 }
             }
         }
-        return true;
-    }
 
-    // 外部から手動で呼ぶ用（デバッグボタン等）は「通常ブロック」として呼ぶ
-    public void PushUp()
-    {
-        if (IsBusy) return;
-        ExecutePushUpInternal(false);
-    }
-
-    // ★修正：引数 isGarbage を追加し、どちらか1段だけを生成するように変更
-    private void ExecutePushUpInternal(bool isGarbage)
-    {
-        // 1. せり上げ実行
-        if (!ShiftStonesUp()) return;
-
-        // 2. 行生成
-        // お邪魔モードならお邪魔行、そうでなければ通常行
-        GenerateNewRow(isGarbage); 
-
-        // お邪魔として生成したなら、ストックを減らす
-        if (isGarbage && pendingGarbage > 0)
+        
+        // 2. ゲームオーバー判定
+        // ★修正：判定ラインを「height - 3」に変更
+        // これで「上から3段目」にブロックが入ったら負けになります
+        for (int x = 0; x < width; x++)
         {
-            pendingGarbage--;
+            if (grid[x, height - 3] != null) 
+            {
+                TriggerLose();
+                return false; 
+            }
         }
-    }
 
-    void GenerateNewRow(bool isGarbage)
+        return true; 
+    }
+void GenerateNewRow(bool isGarbage)
     {
+        // --- お邪魔ブロック専用ロジック：穴の位置を完全ランダムにする ---
+        if (isGarbage)
+{
+    // 穴の幅をランダムに決める (例: 1～3マス)
+    int holeSize = Random.Range(1, 4); 
+
+    // 穴の開始位置を決める (幅からはみ出さないように調整)
+    int holeX = Random.Range(0, width - holeSize + 1);
+
+    // 左側を埋める
+    FillRangeWithGarbage(0, holeX);
+
+    // 右側を埋める (開始位置 + 穴のサイズ から再開)
+    FillRangeWithGarbage(holeX + holeSize, width);
+    
+    return;
+}
+
+        // --- 通常のブロック生成ロジック（前回と同じ） ---
         int currentX = 0;
         bool hasGap = false;
 
-        // 色のリストをここで定義して、インスペクター等の影響を受けないようにする
-        Color[] safeColors = new Color[]
-        {
-            Color.red, 
-            Color.blue, 
-            Color.green, 
-            Color.yellow, 
-            new Color(1f, 0.5f, 0f), // オレンジ
-            Color.cyan, 
-            Color.magenta
-        };
-        
         while (currentX < width)
         {
             int remainingSpace = width - currentX;
-            
-            // お邪魔行なら「基本ブロックを置く」が、たまに(10%くらい)ランダムで隙間を作る
-            bool wantBlock = isGarbage ? (Random.value > 0.1f) : (Random.value < 0.7f);
+            // 通常時は70%の確率でブロック生成
+            bool wantBlock = (Random.value < 0.7f);
 
-            // 通常行で、残り1マスかつまだ隙間がないなら、強制的に隙間を作る（埋まり防止）
-            if (!isGarbage && !hasGap && remainingSpace == 1) wantBlock = false;
-            
-            // お邪魔行でも、最後まで隙間がなかったら最後の1マスは強制的に空ける
-            if (isGarbage && !hasGap && remainingSpace == 1) wantBlock = false;
+            if (!hasGap && remainingSpace == 1) wantBlock = false;
 
             if (wantBlock)
             {
                 int maxW = Mathf.Min(4, remainingSpace);
-                
-                // お邪魔なら1〜maxW、通常も1〜maxW（形状はランダム）
                 int w = Random.Range(1, maxW + 1);
 
-                // まだ隙間がなく、かつ「残り幅全部」を埋めようとした場合
                 if (!hasGap && w == remainingSpace)
                 {
                     w = remainingSpace - 1;
-                    if (w <= 0) wantBlock = false; 
+                    if (w <= 0) wantBlock = false;
                 }
 
                 if (wantBlock && w > 0)
                 {
-                    Color c;
-                    if (isGarbage)
-                    {
-                        c = Color.gray; // お邪魔なら確実にグレー
-                    }
-                    else
-                    {
-                        // 通常ならリストからランダム（絶対にグレーにならない）
-                        c = safeColors[Random.Range(0, safeColors.Length)];
-                    }
-                    
-                    Stone s = Instantiate(stonePrefab, transform).GetComponent<Stone>();
-                    s.Init(this, currentX, 0, w, c);
-                    
-                    for (int k = 0; k < w; k++) 
-                    {
-                        if (currentX + k < width) grid[currentX + k, 0] = s;
-                    }
+                    Color c = safeColors[Random.Range(0, safeColors.Length)];
+                    CreateBlock(currentX, w, c); // 共通化した関数を使う
                     currentX += w;
                 }
                 else
@@ -342,9 +381,37 @@ public class BoardManager : MonoBehaviour
             }
         }
     }
+
+    // ★追加：指定した範囲をお邪魔ブロック(グレー)で埋めるヘルパー関数
+    void FillRangeWithGarbage(int startX, int endX)
+    {
+        int current = startX;
+        while (current < endX)
+        {
+            int space = endX - current;
+            // 1～4、または残りスペースに合わせて幅を決める
+            int w = Random.Range(1, Mathf.Min(4, space) + 1);
+            
+            CreateBlock(current, w, Color.gray);
+            current += w;
+        }
+    }
+
+    // ★追加：ブロック生成処理を共通化（コードをスッキリさせるため）
+    void CreateBlock(int x, int w, Color c)
+    {
+        Stone s = Instantiate(stonePrefab, transform).GetComponent<Stone>();
+        s.Init(this, x, 0, w, c);
+        for (int k = 0; k < w; k++)
+        {
+            if (x + k < width) grid[x + k, 0] = s;
+        }
+    }
+
     public void DropStones()
     {
         HashSet<Stone> processedFrame = new HashSet<Stone>();
+        // 下からではなく、上から順に落とす判定をしたほうが安全
         for (int y = 1; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -355,6 +422,7 @@ public class BoardManager : MonoBehaviour
                 processedFrame.Add(s);
 
                 int targetY = y;
+                // どこまで落ちれるかチェック
                 for (int checkY = y - 1; checkY >= 0; checkY--)
                 {
                     bool canFit = true;
@@ -372,31 +440,19 @@ public class BoardManager : MonoBehaviour
 
                 if (targetY != y)
                 {
-                    for(int k=0; k<s.blockWidth; k++) grid[s.x + k, y] = null;
-                    for(int k=0; k<s.blockWidth; k++) grid[s.x + k, targetY] = s;
+                    for (int k = 0; k < s.blockWidth; k++) grid[s.x + k, y] = null;
+                    for (int k = 0; k < s.blockWidth; k++) grid[s.x + k, targetY] = s;
                     s.MoveToGridAnimated(s.x, targetY, 0.2f);
                 }
             }
         }
     }
 
-    public bool IsBoardEmpty()
-    {
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                if (grid[x, y] != null) return false;
-            }
-        }
-        return true;
-    }
-
     IEnumerator DestroyStoneAnimated(Stone s)
     {
-        if(s == null) yield break;
+        if (s == null) yield break;
         var col = s.GetComponent<Collider2D>();
-        if(col) col.enabled = false;
+        if (col) col.enabled = false;
 
         Vector3 startPos = s.transform.position;
         Vector3 endPos = startPos + Vector3.up * 0.5f;
@@ -405,13 +461,13 @@ public class BoardManager : MonoBehaviour
 
         while (elapsed < duration)
         {
-            if(s == null) yield break; 
+            if (s == null) yield break;
             elapsed += Time.deltaTime;
             float t = Mathf.Clamp01(elapsed / duration);
             s.transform.position = Vector3.Lerp(startPos, endPos, t);
             yield return null;
         }
-        if(s != null) Destroy(s.gameObject);
+        if (s != null) Destroy(s.gameObject);
     }
 
     public Vector2Int GetMovableRange(Stone s)
@@ -426,7 +482,7 @@ public class BoardManager : MonoBehaviour
             if (grid[x, y] != null) break;
             minX = x;
         }
-        
+
         for (int x = s.x + w; x < width; x++)
         {
             if (grid[x, y] != null) break;
@@ -445,9 +501,6 @@ public class BoardManager : MonoBehaviour
     {
         if (!IsInside(x, y)) return;
         grid[x, y] = s;
-        if (s != null)
-        {
-            s.SetGrid(x, y);
-        }
+        if (s != null) s.SetGrid(x, y);
     }
 }
