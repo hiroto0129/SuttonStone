@@ -9,16 +9,17 @@ public class BoardManager : MonoBehaviour
 {
     [Header("Settings")]
     public int width = 8;
-    public int height = 12; // 画像に合わせて少し高くしました
+    public int height = 12;
 
     [Header("References")]
     public Transform leftWall;
     public Transform bottomLine;
     public GameObject stonePrefab;
 
-    [Header("UI")]
+    [Header("UI (In-Game)")]
     public TextMeshProUGUI resultText; 
-    public GameObject restartButton;   
+    public GameObject restartButton; 
+    // ★タイトル画面やヘルプ画面の変数は削除しました（GameControllerへ移動）
 
     [Header("Versus")]
     public BoardManager opponent;
@@ -45,8 +46,16 @@ public class BoardManager : MonoBehaviour
         if (resultText != null) resultText.gameObject.SetActive(false);
         if (restartButton != null) restartButton.SetActive(false);
         
-        // ゲーム開始時に少しブロックを生成
-        PushUp();
+        // ★自動でスタートしないように変更
+        IsGameOver = true; // GameControllerから合図があるまで動かない
+    }
+
+    // ★追加：GameControllerから呼ばれる「試合開始」の合図
+    public void GameStart()
+    {
+        IsGameOver = false;
+        IsBusy = false;
+        PushUp(); // ここで初めてブロック生成＆せり上げ開始
     }
 
     // --- 座標変換 ---
@@ -124,12 +133,10 @@ public class BoardManager : MonoBehaviour
             yield return new WaitForSeconds(0.2f);
         }
 
-        // お邪魔ブロックがあるか、なければ通常のせり上げ
         if (pendingGarbage > 0)
         {
             if (!ExecutePushUpInternal(true)) 
             {
-                // せり上げ失敗（ゲームオーバー）ならループを抜ける
                 IsBusy = false;
                 yield break; 
             }
@@ -180,7 +187,6 @@ public class BoardManager : MonoBehaviour
         if (resultText != null)
         {
             resultText.text = "YOU LOSE...";
-            // ★【修正点1】文字色を青に変更
             resultText.color = Color.blue; 
             resultText.gameObject.SetActive(true);
         }
@@ -207,7 +213,6 @@ public class BoardManager : MonoBehaviour
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
-
 
     // --- 内部ロジック ---
     public bool CheckAndClearHorizontal()
@@ -263,13 +268,11 @@ public class BoardManager : MonoBehaviour
         ExecutePushUpInternal(false);
     }
 
-    // 戻り値をboolにして、失敗(ゲームオーバー)したか分かるようにする
     private bool ExecutePushUpInternal(bool isGarbage)
     {
-        // ★修正ポイント：ShiftStonesUpを呼び出すだけにする（中身を書かない）
         if (!ShiftStonesUp()) 
         {
-             return false; // ゲームオーバーになったので中断
+             return false;
         }
 
         GenerateNewRow(isGarbage);
@@ -281,11 +284,8 @@ public class BoardManager : MonoBehaviour
         return true;
     }
 
-    // ★修正ポイント：ShiftStonesUpメソッドはここ（ExecutePushUpInternalの外）に定義する
-    // ★修正：ブロックを1段上げる処理
     bool ShiftStonesUp()
     {
-        // 1. まずブロックをすべて1段上げる
         for (int y = height - 2; y >= 0; y--)
         {
             HashSet<Stone> processedStones = new HashSet<Stone>();
@@ -304,10 +304,7 @@ public class BoardManager : MonoBehaviour
             }
         }
 
-        
-        // 2. ゲームオーバー判定
-        // ★修正：判定ラインを「height - 3」に変更
-        // これで「上から3段目」にブロックが入ったら負けになります
+        // 判定ライン：height - 3
         for (int x = 0; x < width; x++)
         {
             if (grid[x, height - 3] != null) 
@@ -319,34 +316,25 @@ public class BoardManager : MonoBehaviour
 
         return true; 
     }
-void GenerateNewRow(bool isGarbage)
+
+    void GenerateNewRow(bool isGarbage)
     {
-        // --- お邪魔ブロック専用ロジック：穴の位置を完全ランダムにする ---
         if (isGarbage)
-{
-    // 穴の幅をランダムに決める (例: 1～3マス)
-    int holeSize = Random.Range(1, 4); 
+        {
+            int holeSize = Random.Range(1, 4); 
+            int holeX = Random.Range(0, width - holeSize + 1);
 
-    // 穴の開始位置を決める (幅からはみ出さないように調整)
-    int holeX = Random.Range(0, width - holeSize + 1);
+            FillRangeWithGarbage(0, holeX);
+            FillRangeWithGarbage(holeX + holeSize, width);
+            return;
+        }
 
-    // 左側を埋める
-    FillRangeWithGarbage(0, holeX);
-
-    // 右側を埋める (開始位置 + 穴のサイズ から再開)
-    FillRangeWithGarbage(holeX + holeSize, width);
-    
-    return;
-}
-
-        // --- 通常のブロック生成ロジック（前回と同じ） ---
         int currentX = 0;
         bool hasGap = false;
 
         while (currentX < width)
         {
             int remainingSpace = width - currentX;
-            // 通常時は70%の確率でブロック生成
             bool wantBlock = (Random.value < 0.7f);
 
             if (!hasGap && remainingSpace == 1) wantBlock = false;
@@ -365,7 +353,7 @@ void GenerateNewRow(bool isGarbage)
                 if (wantBlock && w > 0)
                 {
                     Color c = safeColors[Random.Range(0, safeColors.Length)];
-                    CreateBlock(currentX, w, c); // 共通化した関数を使う
+                    CreateBlock(currentX, w, c);
                     currentX += w;
                 }
                 else
@@ -382,14 +370,12 @@ void GenerateNewRow(bool isGarbage)
         }
     }
 
-    // ★追加：指定した範囲をお邪魔ブロック(グレー)で埋めるヘルパー関数
     void FillRangeWithGarbage(int startX, int endX)
     {
         int current = startX;
         while (current < endX)
         {
             int space = endX - current;
-            // 1～4、または残りスペースに合わせて幅を決める
             int w = Random.Range(1, Mathf.Min(4, space) + 1);
             
             CreateBlock(current, w, Color.gray);
@@ -397,7 +383,6 @@ void GenerateNewRow(bool isGarbage)
         }
     }
 
-    // ★追加：ブロック生成処理を共通化（コードをスッキリさせるため）
     void CreateBlock(int x, int w, Color c)
     {
         Stone s = Instantiate(stonePrefab, transform).GetComponent<Stone>();
@@ -411,7 +396,6 @@ void GenerateNewRow(bool isGarbage)
     public void DropStones()
     {
         HashSet<Stone> processedFrame = new HashSet<Stone>();
-        // 下からではなく、上から順に落とす判定をしたほうが安全
         for (int y = 1; y < height; y++)
         {
             for (int x = 0; x < width; x++)
@@ -422,7 +406,6 @@ void GenerateNewRow(bool isGarbage)
                 processedFrame.Add(s);
 
                 int targetY = y;
-                // どこまで落ちれるかチェック
                 for (int checkY = y - 1; checkY >= 0; checkY--)
                 {
                     bool canFit = true;
