@@ -173,15 +173,26 @@ public class BoardCursor : MonoBehaviour
     {
         if (heldStone == null)
         {
-            // カーソル移動
+            // カーソル移動（縦）
             if (dy != 0)
             {
                 int ny = cy + dy;
-                if (myBoard.IsInside(cx, ny))
-                {
-                    cy = ny;
-                    UpdateVisualPosition();
-                }
+
+                // 1. 枠外チェック（既存）
+                if (!myBoard.IsInside(cx, ny)) return;
+
+                // 2. 【追加】高さ制限チェック
+                // 「一番高いブロックの位置」を取得
+                int maxY = myBoard.GetMaxStoneY();
+
+                // 上に移動しようとしている時、一番高いブロックより上に行こうとしたら止める
+                // ※もし「ブロックのすぐ上の空きマスまでは行けるようにしたい」なら
+                //   ny > maxY + 1 としてください。
+                //   今回は「ブロックを選ぶ」目的なので、ブロックがある高さまでで止めます。
+                if (ny > maxY) return;
+
+                cy = ny;
+                UpdateVisualPosition();
                 return;
             }
 

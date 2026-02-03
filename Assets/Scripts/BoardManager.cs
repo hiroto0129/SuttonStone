@@ -486,4 +486,16 @@ public class BoardManager : MonoBehaviour
         grid[x, y] = s;
         if (s != null) s.SetGrid(x, y);
     }
+    
+    public int GetMaxStoneY()
+    {
+        for (int y = height - 1; y >= 0; y--)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                if (grid[x, y] != null) return y;
+            }
+        }
+        return 0; // ブロックが一つもない場合は0
+    }
 }
